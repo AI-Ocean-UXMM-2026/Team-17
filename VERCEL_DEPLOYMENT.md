@@ -50,7 +50,7 @@ The seven server skips require explicit database integration configuration. No p
 
 ## Create two Vercel projects
 
-Import the same Git repository twice and select a separate Root Directory for each project. Paths below assume the Git root is `Team-17`.
+Use the existing `surfertrack-web` and `surfertrack-api` projects. They do not need to be connected through Vercel's GitHub App: the manual GitHub Actions workflows below build and deploy through Vercel CLI. Paths below assume the Git root is `Team-17`.
 
 | Setting | Frontend project | Backend project |
 | --- | --- | --- |
@@ -111,3 +111,88 @@ No cloud deployment was performed. A successful local build establishes compilat
 **READY FOR STAGING DEPLOYMENT** — local release checks pass and entry points are structurally compatible with the documented Next.js/Express project setup. This is not a production-readiness claim. Configure the two projects and their HTTPS origins, then complete the isolated database, SMTP, authenticated lifecycle, concurrent refresh, connection-limit, and deployed Swagger-asset checks above. Deployment itself remains unperformed.
 
 References: [Vercel Express runtime](https://vercel.com/docs/frameworks/backend/express), [Vercel monorepo setup](https://vercel.com/docs/monorepos).
+
+## Manual GitHub Actions Preview deployments
+
+The repository now includes `.github/workflows/deploy-client.yml` and `.github/workflows/deploy-server.yml` at the Git root. Neither has a push, pull-request, scheduled, or production deployment trigger. Both accept `workflow_dispatch` only, and checks run only when the selected ref is `main`. No workflow has been run on GitHub as part of this configuration work.
+
+Each workflow has two jobs:
+
+1. **checks**: Ubuntu/Node 24, exact lockfile installs, build/tests and target checks, with dummy database URLs and no deployment secrets. The client job installs both packages because the real client pretest compiles the sibling server. The server job generates/validates Prisma and verifies that importing the default-exported Express app starts no listener. No migrations or seeds run.
+2. **deploy**: runs only after checks pass, with deployment secrets scoped to this job and a target-specific GitHub Environment. Installs pinned Vercel CLI `65.2.0`, pulls Preview settings, validates project mapping/settings/required variables, runs `vercel build --environment=preview`, and runs `vercel deploy --prebuilt --environment=preview`. Downloaded environment files and build output are removed in an always-run cleanup step and are never uploaded as Actions artifacts.
+
+GitHub Actions are pinned to verified immutable commits of `actions/checkout` v6 and `actions/setup-node` v6; checkout does not persist its Git credentials. Workflows use `contents: read`, timeouts, and separate target concurrency groups with cancellation disabled. GitHub may replace a pending run when another is queued; an active deployment is not cancelled by this workflow configuration. Deployment IDs and token values are not hardcoded. There is no automatic production deployment or `--prod` command.
+
+### GitHub setup
+
+In `AI-Ocean-UXMM-2026/Team-17` → **Settings → Secrets and variables → Actions → Repository secrets**, add:
+
+| Secret | Mapping |
+| --- | --- |
+| `VERCEL_TOKEN` | Vercel token authorized to deploy both existing projects; select the narrowest available account/team scope and suitable expiry |
+| `VERCEL_ORG_ID` | Owner/account/team ID for both projects |
+| `VERCEL_CLIENT_PROJECT_ID` | Project ID of `surfertrack-web` |
+| `VERCEL_SERVER_PROJECT_ID` | Project ID of `surfertrack-api` |
+
+Obtain IDs from the Vercel project/account settings. Enter them directly in GitHub's secret UI; do not commit them or send credentials in chat. Missing secrets fail the deployment job with the missing repository secret name only. No remote secret availability was queried or verified locally.
+
+Create GitHub Environments named **staging-client** and **staging-server**. Restrict deployment branches to `main`, and configure required reviewers where supported by the repository's GitHub plan. These GitHub Environment names gate the jobs; the Vercel target remains **Preview**. Keep secrets in repository secrets as specified above. If organizational Actions policy restricts allowed actions, allow the two pinned official actions. The workflow files must first be reviewed and made available on the default branch before GitHub offers manual dispatch; this task does not commit or push them.
+
+### Verify each Vercel project before running
+
+Remote settings cannot be assumed from project existence and were not authenticated or fetched during this task. In Vercel → **Project Settings → Build and Deployment**, explicitly set:
+
+| Setting | `surfertrack-web` | `surfertrack-api` |
+| --- | --- | --- |
+| Root Directory | `client` | `server` |
+| Framework Preset | Next.js (`nextjs`) | Express (`express`) |
+| Node.js Version | 24.x | 24.x |
+| Install Command override | `npm ci` | `npm ci` |
+| Build Command override | `npm run build` | `npm run build` |
+| Output Directory | Default (or `.next`) | Default, no override |
+
+All Vercel CLI commands intentionally run at the **repository root**, with the target ID mapped through `VERCEL_PROJECT_ID`. The pulled project's Root Directory applies `client` or `server` once. Do not add a workflow `working-directory: client`/`server` to these commands while retaining those project root settings. The settings guard fails before a build if the linked project, root, framework, install/build commands, or output override differ from the expected configuration. No conflicting `vercel.json` existed at inspection time.
+
+The API entry point is `server/src/app.ts`; it default-exports one Express application and does not call `listen`. `server/src/server.ts` remains the separate local listener. Prisma is a module-level shared client, generated on install; generation and schema validation do not connect to or mutate the database. Connection limits, shared rate limits, and cross-instance token refresh still require the staging checks described earlier.
+
+### Preview environment checklist
+
+Configure variables in **Vercel**, selecting the **Preview** environment. The workflows pull these securely instead of copying local `.env` files into GitHub. The guard reports missing names, masks downloaded values before build steps, rejects localhost/non-HTTPS origins, and rejects common secret-bearing `NEXT_PUBLIC_*` names and backend-only variables on the frontend.
+
+- Frontend required: `NEXT_PUBLIC_API_BASE_URL`, `EXPRESS_API_URL`, `APP_ORIGIN`.
+- Backend required: `DATABASE_URL`, `DIRECT_URL`, `FRONTEND_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`.
+- Backend optional: `ENABLE_API_DOCS` (`false` recommended initially; only literal `true`/`false` accepted).
+- Remove local `NODE_ENV=development` overrides. Vercel Preview builds use production Node mode. No custom `PORT` is required.
+- There are no application JWT/session signing-secret variables in the inspected opaque-token implementation. Do not invent one. `VERCEL_TOKEN` is a deployment credential, not an application variable.
+- Keep `NEXT_PUBLIC_API_BASE_URL` public and free of credentials; it is embedded in the web build. Never prefix database, SMTP, or authentication secrets with `NEXT_PUBLIC_`.
+- Use an approved isolated staging database with reviewed migrations already applied; these workflows never apply them.
+
+Stable staging origins are required: `APP_ORIGIN` and backend `FRONTEND_URL` must both match the frontend URL actually opened by the browser; `NEXT_PUBLIC_API_BASE_URL` and `EXPRESS_API_URL` must reach the staging API. Preview deployment URLs change each run. Reserve/configure stable preview aliases or update the corresponding Preview variables and rebuild/redeploy in a controlled sequence. The workflows report deployment URLs but do not assign aliases or automatically rewrite cross-project environment variables. Prefer a stable API Preview alias before building the client.
+
+Review **Deployment Protection** for both projects. A browser registration request and a Next.js server-to-API request must reach the API; a protected API may return Vercel authentication HTML instead of API JSON. Use a reviewed access strategy for staging, such as protection settings appropriate for the test audience or an explicitly implemented automation bypass. No bypass secret or bypass header support has been silently introduced. Do not place a bypass token in `NEXT_PUBLIC_*`. Verify access before relying on authenticated end-to-end tests.
+
+### Run manually and find results
+
+After the files and settings are reviewed and available on `main`:
+
+1. Open the repository's **Actions** tab.
+2. Select **Deploy Server Preview**, click **Run workflow**, choose `main`, and run it. Approve the staging-server Environment if configured.
+3. Inspect the job summary for the **Server Preview** URL. Confirm health/access and the stable API staging origin.
+4. Configure/confirm frontend Preview variables, then select **Deploy Client Preview** and run it on `main`. Approve staging-client if configured.
+5. Find the **Client Preview** URL in that run's job summary. Open it using the configured stable origin for session tests.
+
+Both deployment steps capture Vercel's returned URL as the `deployment` step's `url` output and append it to the Actions summary. The Vercel project's Deployments tab also lists the result. CLI stdout is captured; CLI progress/errors appear in the step logs. A settings validation failure prints the setting or variable **name**, never its value.
+
+On failure, open the first failing step in Actions: dependency/build/test errors must be fixed before deployment; missing secrets or settings must be corrected in GitHub/Vercel; Vercel build/deployment errors can also be inspected in the target project's dashboard. For runtime failures, use Vercel function logs and the staging acceptance checklist above. Do not print `.vercel/.env.preview.local`, enable shell tracing/debug logging, upload `.vercel` as an artifact, or paste environment files into issue reports.
+
+### Configuration validation performed
+
+- Actionlint 1.7.12 passed both workflows, including YAML structure and GitHub Actions expressions (external ShellCheck was unavailable and disabled for this local validation).
+- Verified pinned Vercel CLI 65.2.0 help supports the pull, build environment, and prebuilt Preview deploy arguments. No authenticated CLI command or deployment was executed.
+- Deployment settings guard: 11 fixture tests passed, including wrong mapping/root/framework, unsafe build commands, missing variables, public secrets, backend variables on frontend, and development-mode overrides.
+- Local client typecheck, lint, build and all 373 tests passed; server build/test passed with 160 passes and 7 isolated-database skips. Prisma validation, Express import check, production smoke script, and `git diff --check` passed.
+- Real Vercel project settings, GitHub secrets, isolated staging database state, SMTP, Preview access, stable origins, and actual GitHub Actions/Linux build output remain unverified until setup and the first authorized manual run.
+
+The workflows are configured locally, not proven by a successful cloud run. No deployment, commit, push, migration, production environment change, or shared Supabase mutation was performed.
+
+Reference: [Vercel's GitHub Actions build/prebuilt deployment guide](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel).
