@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const verifier = path.join(__dirname, 'check-vercel-settings.cjs');
 
-function fixture(t, target, change = () => {}) {
+function fixture(t, target, change = () => {}, config) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'surfertrack-ci-test-'));
   t.after(() => {
     assert.ok(directory.startsWith(path.join(os.tmpdir(), 'surfertrack-ci-test-')));
@@ -24,6 +24,10 @@ function fixture(t, target, change = () => {}) {
     SMTP_USER: 'test', SMTP_PASSWORD: 'fixture-only', SMTP_FROM: 'test@example.test',
   };
   change(project, values);
+  if (config !== undefined) {
+    fs.mkdirSync(path.join(directory, target));
+    fs.writeFileSync(path.join(directory, target, 'vercel.json'), JSON.stringify(config));
+  }
   fs.mkdirSync(path.join(directory, '.vercel'));
   fs.writeFileSync(path.join(directory, '.vercel/project.json'), JSON.stringify(project));
   fs.writeFileSync(path.join(directory, '.vercel/.env.preview.local'), Object.entries(values).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('\n'));
@@ -31,6 +35,29 @@ function fixture(t, target, change = () => {}) {
     cwd: directory, env: { ...process.env, VERCEL_ORG_ID: 'test-org', VERCEL_PROJECT_ID: 'test-project' }, encoding: 'utf8',
   });
 }
+test('server repository commands override stale dashboard commands', t => {
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../server/vercel.json'), 'utf8'));
+  const result = fixture(t, 'server', p => {
+    p.settings.installCommand = null;
+    p.settings.buildCommand = 'npm run old-build';
+  }, config);
+  assert.equal(result.status, 0, result.stderr);
+});
+for (const [name, config, diagnostic] of [
+  ['install command', { installCommand: 'npm install' }, 'Install Command'],
+  ['build command', { buildCommand: 'npm run db:migrate' }, 'Build Command'],
+]) {
+  test(`rejects unsafe repository ${name} despite valid dashboard settings`, t => {
+    const result = fixture(t, 'server', () => {}, config);
+    assert.equal(result.status, 1);
+    assert.ok(result.stderr.includes(diagnostic));
+  });
+}
+test('repository configuration cannot bypass the dashboard root mapping check', t => {
+  const result = fixture(t, 'server', p => { p.settings.rootDirectory = 'client'; }, { rootDirectory: 'server' });
+  assert.equal(result.status, 1);
+  assert.ok(result.stderr.includes('Root Directory'));
+});
 for (const target of ['client', 'server']) {
   test(`${target} accepts matching settings and complete Preview configuration`, t => {
     assert.equal(fixture(t, target).status, 0);
@@ -40,6 +67,7 @@ for (const [name, mutate, diagnostic] of [
   ['wrong project', p => { p.projectId = 'wrong'; }, 'does not match'],
   ['wrong root', p => { p.settings.rootDirectory = 'server'; }, 'Root Directory'],
   ['wrong framework', p => { p.settings.framework = 'other'; }, 'framework'],
+  ['unsafe install command', p => { p.settings.installCommand = 'npm install'; }, 'Install Command'],
   ['unsafe build command', p => { p.settings.buildCommand = 'npm run db:migrate'; }, 'Build Command'],
   ['missing environment', (_p, v) => { delete v.APP_ORIGIN; }, 'Missing Vercel Preview variable: APP_ORIGIN'],
   ['localhost origin', (_p, v) => { v.APP_ORIGIN = 'http://localhost:3000'; }, 'HTTPS origin'],

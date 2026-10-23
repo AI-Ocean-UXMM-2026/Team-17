@@ -10,8 +10,11 @@ try {
   if (project.projectId !== process.env.VERCEL_PROJECT_ID || project.orgId !== process.env.VERCEL_ORG_ID) {
     fail('Pulled Vercel project does not match the configured GitHub secrets');
   }
-  const settings = project.settings;
-  if (!settings || settings.rootDirectory !== target) fail(`Set Vercel Root Directory to ${target}`);
+  if (!project.settings || project.settings.rootDirectory !== target) fail(`Set Vercel Root Directory to ${target}`);
+  // Vercel applies vercel.json from the project's Root Directory over dashboard settings.
+  const configPath = `${target}/vercel.json`;
+  const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const settings = { ...project.settings, ...config };
   if (settings.framework !== (target === 'client' ? 'nextjs' : 'express')) fail('Unexpected Vercel framework preset');
   if (settings.installCommand !== 'npm ci') fail('Set Vercel Install Command to npm ci');
   if (settings.buildCommand !== 'npm run build') fail('Set Vercel Build Command to npm run build');
