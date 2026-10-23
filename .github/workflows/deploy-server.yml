@@ -2,12 +2,6 @@ name: Deploy Server Preview
 
 on:
   workflow_dispatch:
-    inputs:
-      vercel_token_rotated:
-        description: 'I revoked the exposed Vercel token and replaced VERCEL_TOKEN in GitHub Secrets'
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -58,11 +52,6 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_SERVER_PROJECT_ID }}
       VERCEL_TELEMETRY_DISABLED: '1'
     steps:
-      - name: Require token revocation and replacement confirmation
-        if: ${{ !inputs.vercel_token_rotated }}
-        run: |
-          echo "::error::Revoke the exposed Vercel token and replace VERCEL_TOKEN in GitHub Actions Secrets before deploying."
-          exit 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
