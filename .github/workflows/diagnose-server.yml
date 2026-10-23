@@ -1,0 +1,52 @@
+name: Diagnose Server Production
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/diagnose-server.yml']
+permissions:
+  contents: read
+jobs:
+  runtime-logs:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production-server
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_SERVER_PROJECT_ID }}
+      VERCEL_TELEMETRY_DISABLED: '1'
+      VERCEL_ENVIRONMENT: production
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - run: npm install --global vercel@65.2.0
+      - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Validate and mask environment values
+        run: |
+          node .github/scripts/read-vercel-env-metadata.cjs
+          node .github/scripts/check-vercel-settings.cjs server --remote-build
+      - name: Install diagnostic dependencies
+        env:
+          DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
+          DIRECT_URL: postgresql://test:test@127.0.0.1:1/test
+        run: npm ci --prefix server --include=dev
+      - name: Build Prisma diagnostic entry
+        run: npm --prefix server run build
+      - name: Check registration database writes with rollback and verify SMTP without sending mail
+        # Verify unassigned SME registration against the live schema, then roll it back.
+        run: node .github/diagnostics/check-production-services.cjs
+      - name: Recent Production runtime errors
+        run: vercel logs --environment production --since 10m --limit 60 --token="$VERCEL_TOKEN"
+      - name: Inspect database URL formatting without displaying values
+        # Human-readable flags avoid redaction of common boolean environment values.
+        run: node .github/diagnostics/check-database-env.cjs
+      - name: Recent failed Production requests
+        run: vercel logs requests --environment production --since 15m --limit 10 --query 'httpStatus >= 500' --token="$VERCEL_TOKEN"
+      - if: always()
+        run: rm -rf -- .vercel

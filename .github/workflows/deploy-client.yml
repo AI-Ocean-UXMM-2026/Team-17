@@ -1,0 +1,107 @@
+name: Deploy Client Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-client.yml'
+      - '.github/scripts/**'
+      - '.github/public-api-config.json'
+      - 'client/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-client-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    # Release credentials are never available to this job.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://test:test@127.0.0.1:1/test
+      DIRECT_URL: postgresql://test:test@127.0.0.1:1/test
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            client/package-lock.json
+            server/package-lock.json
+      # Client pretest compiles the sibling server; install its locked dependencies too.
+      - run: npm ci --prefix server
+      - run: npm ci --prefix client
+      - run: node --test .github/scripts/check-deployment-config.test.cjs
+      - run: npm --prefix client run typecheck
+      - run: npm --prefix client run lint -- --max-warnings=0
+      - run: npm --prefix client test
+      # Production builds also run remotely in the deployment job.
+      - run: npm --prefix client run build
+
+  deploy:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production-client
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TELEMETRY_DISABLED: '1'
+      VERCEL_ENVIRONMENT: production
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Check required deployment secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [[ -z "${!name}" ]]; then
+              label="$name"
+              echo "::error::Missing GitHub secret: $label"
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@65.2.0
+      - name: Configure public Production URLs and access
+        run: node .github/scripts/configure-production.cjs client
+      # Run CLI at repository root: Vercel applies the project's client/server Root Directory.
+      - name: Pull Production settings and environment
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Verify project mapping, settings, and environment names
+        run: |
+          node .github/scripts/read-vercel-env-metadata.cjs
+          node .github/scripts/check-vercel-settings.cjs client --remote-build
+      - name: Build and deploy Production on Vercel
+        id: deployment
+        shell: bash
+        run: |
+          url="$(vercel deploy --prod --archive=tgz --yes --token="$VERCEL_TOKEN")"
+          if [[ ! "$url" =~ ^https://[a-zA-Z0-9.-]+/?$ ]]; then
+            echo "::error::Vercel did not return a valid deployment URL"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          printf '### Client Production\n\n%s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify public frontend
+        run: node .github/scripts/check-production-client.cjs
+      - name: Remove downloaded environment and build output
+        if: always()
+        shell: bash
+        run: rm -rf -- .vercel client/.vercel

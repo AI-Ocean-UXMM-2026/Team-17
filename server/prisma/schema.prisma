@@ -1,0 +1,284 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SME
+  OPERATOR
+  RIDER
+}
+
+// Profiles are created atomically with local accounts.
+model Profile {
+  id        String   @id @db.Uuid
+  account   Account?
+  fullName  String?  @map("full_name") @db.VarChar(120)
+  phone     String?  @db.VarChar(32)
+  role      Role     @default(SME)
+  providerId String? @map("provider_id") @db.Uuid
+  provider DeliveryProvider? @relation("OperatorProvider", fields: [providerId], references: [id], onDelete: Restrict)
+  // Operational deactivation is distinct from email/account activation and workload.
+  // Historical assignments, orders and incidents are intentionally retained.
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  orders    ParcelOrder[]
+  operatorOrders ParcelOrder[] @relation("OrderOperator")
+  statusEvents OrderStatusEvent[]
+  riderAssignments RiderAssignment[] @relation("AssignmentRider")
+  assignedParcels RiderAssignment[] @relation("AssignmentOperator")
+  riderProfile RiderProfile?
+  incidents RiderIncident[] @relation("IncidentRider")
+  reviewedIncidents RiderIncident[] @relation("IncidentReviewer")
+
+  @@index([providerId])
+  @@index([providerId, deactivatedAt])
+  @@map("profiles")
+}
+
+// Rider-specific onboarding data. Identity and provider membership remain on Profile.
+// completedAt is server-managed and derived from persisted required fields.
+enum VehicleType {
+  MOTORCYCLE
+  BICYCLE
+  CAR
+  VAN
+  ON_FOOT
+}
+
+model RiderProfile {
+  id                 String      @id @default(uuid()) @db.Uuid
+  profileId          String      @unique @map("profile_id") @db.Uuid
+  profile            Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  vehicleType        VehicleType? @map("vehicle_type")
+  vehiclePlateNumber String?     @map("vehicle_plate_number") @db.VarChar(32)
+  vehicleModel       String?     @map("vehicle_model") @db.VarChar(120)
+  vehicleColor       String?     @map("vehicle_color") @db.VarChar(64)
+  completedAt        DateTime?   @map("completed_at") @db.Timestamptz(3)
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("rider_profiles")
+}
+
+model Account {
+  id String @id @default(uuid()) @db.Uuid
+  email String @unique @db.VarChar(254)
+  passwordHash String @map("password_hash")
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(3)
+  profile Profile @relation(fields: [id], references: [id], onDelete: Cascade)
+  sessions AuthSession[]
+  verificationToken EmailVerificationToken?
+  passwordResetToken PasswordResetToken?
+  riderInvitations RiderInvitation[]
+  @@map("accounts")
+}
+
+model RiderInvitation {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String    @unique @db.VarChar(254)
+  fullName    String?   @map("full_name") @db.VarChar(120)
+  tokenHash   String    @unique @map("token_hash")
+  invitedById String    @map("invited_by_id") @db.Uuid
+  invitedBy   Account   @relation(fields: [invitedById], references: [id], onDelete: Restrict)
+  providerId String? @map("provider_id") @db.Uuid
+  provider DeliveryProvider? @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  acceptedAt  DateTime? @map("accepted_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([invitedById])
+  @@index([providerId, expiresAt])
+  @@index([expiresAt])
+  @@map("rider_invitations")
+}
+
+model EmailVerificationToken {
+  id String @id @default(uuid()) @db.Uuid
+  accountId String @unique @map("account_id") @db.Uuid
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash String @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id String @id @default(uuid()) @db.Uuid
+  accountId String @unique @map("account_id") @db.Uuid
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash String @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model AuthSession {
+  id String @id @default(uuid()) @db.Uuid
+  accountId String @map("account_id") @db.Uuid
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accessHash String @unique @map("access_hash")
+  refreshHash String @unique @map("refresh_hash")
+  accessExpiresAt DateTime @map("access_expires_at") @db.Timestamptz(3)
+  refreshExpiresAt DateTime @map("refresh_expires_at") @db.Timestamptz(3)
+  @@index([accountId])
+  @@map("auth_sessions")
+}
+
+enum OrderStatus {
+  CREATED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+// Parcel weight is stored in kilograms (parcel_weight_kg). COD is MMK and is not a delivery fee.
+// Nullable pricing fields preserve legacy orders; new orders require server-resolved pricing.
+model ParcelOrder {
+  id                    String          @id @default(uuid()) @db.Uuid
+  orderCode             String          @unique @map("order_code") @db.VarChar(32)
+  qrIdentifier          String          @unique @map("qr_identifier") @db.VarChar(64)
+  ownerId               String          @map("owner_id") @db.Uuid
+  owner                 Profile         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  operatorId            String?         @map("operator_id") @db.Uuid
+  operator              Profile?        @relation("OrderOperator", fields: [operatorId], references: [id], onDelete: Restrict)
+  deliveryProviderId    String? @map("legacy_delivery_service_id") @db.Uuid
+  deliveryProvider      DeliveryProvider? @relation(fields: [deliveryProviderId], references: [id], onDelete: Restrict, map: "orders_legacy_delivery_service_id_fkey")
+  destinationCity       String? @map("destination_city") @db.VarChar(120)
+  deliveryFee           Decimal? @map("delivery_fee") @db.Decimal(12, 2)
+  recipientName         String          @map("recipient_name") @db.VarChar(120)
+  phoneNumber           String          @map("phone_number") @db.VarChar(32)
+  township              String          @db.VarChar(120)
+  deliveryAddress       String          @map("delivery_address") @db.VarChar(500)
+  parcelWeightKg        Decimal         @map("parcel_weight_kg") @db.Decimal(8, 3)
+  codAmount             Decimal         @map("cod_amount") @db.Decimal(12, 2)
+  currency              String          @default("MMK") @db.VarChar(3)
+  senderName            String          @map("sender_name") @db.VarChar(120)
+  deliveryInstructions  String?         @map("delivery_instructions") @db.VarChar(1000)
+  status                OrderStatus     @default(CREATED)
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  statusEvents          OrderStatusEvent[]
+  assignment            RiderAssignment?
+  incidents             RiderIncident[]
+
+  @@index([deliveryProviderId], map: "orders_legacy_delivery_service_id_idx")
+  @@index([ownerId])
+  @@index([operatorId])
+  @@map("orders")
+}
+
+// Append-only record of parcel status changes. The actor is always the
+// authenticated user from the server session, never a client-supplied id.
+model OrderStatusEvent {
+  id             String      @id @default(uuid()) @db.Uuid
+  orderId        String      @map("order_id") @db.Uuid
+  order          ParcelOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actorId        String      @map("actor_id") @db.Uuid
+  actor          Profile     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  previousStatus OrderStatus @map("previous_status")
+  status         OrderStatus
+  note           String?     @db.VarChar(1000)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_events")
+}
+
+// One permanent assignment per order in the MVP; no reassignment workflow.
+model RiderAssignment {
+  id           String      @id @default(uuid()) @db.Uuid
+  orderId      String      @unique @map("order_id") @db.Uuid
+  order        ParcelOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  riderId      String      @map("rider_id") @db.Uuid
+  rider        Profile     @relation("AssignmentRider", fields: [riderId], references: [id], onDelete: Restrict)
+  assignedById String      @map("assigned_by_id") @db.Uuid
+  assignedBy   Profile     @relation("AssignmentOperator", fields: [assignedById], references: [id], onDelete: Restrict)
+  assignedAt   DateTime    @default(now()) @map("assigned_at") @db.Timestamptz(3)
+  incidents    RiderIncident[]
+
+  @@index([riderId, assignedAt])
+  @@map("rider_assignments")
+}
+
+// Rider-reported parcel problems. The presence of any record is the incident flag,
+// so hasIncident is always derived and cannot drift. Reporting never changes OrderStatus.
+enum IncidentType {
+  DAMAGED
+  BROKEN
+  LOST
+}
+
+enum IncidentStatus {
+  OPEN
+  REVIEWED
+}
+
+model RiderIncident {
+  id           String           @id @default(uuid()) @db.Uuid
+  orderId      String           @map("order_id") @db.Uuid
+  order        ParcelOrder      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  riderId      String           @map("rider_id") @db.Uuid
+  rider        Profile          @relation("IncidentRider", fields: [riderId], references: [id], onDelete: Restrict)
+  assignmentId String?          @map("assignment_id") @db.Uuid
+  assignment   RiderAssignment? @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  providerId   String           @map("provider_id") @db.Uuid
+  provider     DeliveryProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  type         IncidentType
+  reason       String           @db.VarChar(200)
+  description  String           @db.VarChar(1000)
+  status       IncidentStatus   @default(OPEN)
+  reviewedAt   DateTime?        @map("reviewed_at") @db.Timestamptz(3)
+  reviewedById String?          @map("reviewed_by_id") @db.Uuid
+  reviewedBy   Profile?         @relation("IncidentReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // One report of a given type per parcel prevents accidental duplicate submissions.
+  @@unique([orderId, type], map: "rider_incidents_order_id_type_key")
+  @@index([riderId, createdAt], map: "rider_incidents_rider_id_created_at_idx")
+  @@index([providerId, status, createdAt], map: "rider_incidents_provider_id_status_created_at_idx")
+  @@map("rider_incidents")
+}
+
+// Reuses the historical catalog and existing order foreign key without copying data.
+model DeliveryProvider {
+  id String @id(map: "delivery_services_pkey") @default(uuid()) @db.Uuid
+  name String @unique @db.VarChar(120)
+  isActive Boolean @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  cityPrices DeliveryCityPrice[]
+  orders ParcelOrder[]
+  operators Profile[] @relation("OperatorProvider")
+  invitations RiderInvitation[]
+  incidents RiderIncident[]
+  @@index([isActive], map: "legacy_delivery_services_is_active_idx")
+  @@map("legacy_delivery_services")
+}
+
+model DeliveryCityPrice {
+  id String @id @default(uuid()) @db.Uuid
+  providerId String @map("provider_id") @db.Uuid
+  provider DeliveryProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  city String @db.VarChar(120)
+  fee Decimal @db.Decimal(12, 2)
+  isActive Boolean @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([providerId, city])
+  @@index([city, isActive])
+  @@map("delivery_city_prices")
+}
