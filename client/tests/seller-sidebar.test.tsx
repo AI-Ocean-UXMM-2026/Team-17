@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { SellerSidebar } from "@/features/seller/components/seller-sidebar";
 import { useAuthStore } from "@/stores/auth.store";
+import { operatorNavigation } from "@/features/operator/config/operator-navigation";
 
 const { pathname } = vi.hoisted(() => ({ pathname: { current: "/seller" } }));
 vi.mock("next/navigation", () => ({
@@ -43,9 +44,19 @@ it("keeps unavailable items non-interactive instead of linking to missing routes
   expect(screen.queryByRole("link", { name: /Dispatch/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /Reports/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /Delivery Team/ })).toBeNull();
-  for (const label of ["Dispatch", "Reports", "Delivery Team"]) {
+  for (const label of ["Reports", "Delivery Team"]) {
     expect(screen.getByText(label).closest('[aria-disabled="true"]')).toBeTruthy();
   }
+});
+
+it("keeps dispatch in Operator navigation rather than the Seller workspace", () => {
+  render(<SellerSidebar />);
+  expect(screen.queryByText("Dispatch")).toBeNull();
+  expect(screen.queryByRole("link", { name: "Rider Assignment" })).toBeNull();
+  for (const link of screen.getAllByRole("link")) {
+    expect(link.getAttribute("href")).not.toMatch(/^\/operator(?:\/|$)/);
+  }
+  expect(operatorNavigation.find((item) => item.title === "Rider Assignment")?.href).toBe("/operator/assignments");
 });
 
 it("provides a logout action in the sidebar footer", () => {

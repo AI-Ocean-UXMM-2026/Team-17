@@ -89,6 +89,8 @@ export function SmeDashboard() {
       </div>
     </section>
 
+                <RecentShipmentsCallout onViewRecentShipments={() => setView("recent")} />
+
                 <MonthlyCostSummary
                   entries={dashboard.monthlyCosts.map((entry) => ({ month: entry.month, cost: Number(entry.cost) }))}
                   currency={dashboard.monthlyCosts[0]?.currency ?? "MMK"}

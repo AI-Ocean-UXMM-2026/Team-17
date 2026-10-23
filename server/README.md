@@ -19,7 +19,7 @@ npm run dev
 - OpenAPI 3.0 JSON: [http://localhost:4000/api/docs.json](http://localhost:4000/api/docs.json)
 - Health: [http://localhost:4000/health](http://localhost:4000/health)
 
-Use your configured port if it differs from 3000.
+Use your configured port if it differs from 4000.
 
 1. Expand **Authentication > POST /api/auth/register**, click **Try it out**, enter
    a new email/password, and click **Execute**. Registration sends a verification

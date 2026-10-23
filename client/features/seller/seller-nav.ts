@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { CreditCard, GitFork, Package, Search, Settings, Users } from "lucide-react";
+import { CreditCard, Package, Search, Settings, Users } from "lucide-react";
 
 export type SellerNavItem = {
   label: string;
@@ -20,7 +20,6 @@ export const sellerOperationsNav: SellerNavItem[] = [
     paths: ["/seller", "/seller/all-parcels", "/seller/order/new"],
     live: true,
   },
-  // { label: "Dispatch", icon: GitFork, paths: [] },
   { label: "Tracking", icon: Search, href: "/seller/tracking", paths: ["/seller/tracking"] },
   { label: "Reports", icon: CreditCard, paths: [] },
   { label: "Settings", icon: Settings, href: "/seller/settings", paths: ["/seller/settings"] },

@@ -42,3 +42,6 @@ app.use("/api/riders", riderRouter);
 app.use("/api/delivery", deliveryRouter);
 app.use(notFound);
 app.use(errorHandler);
+
+// Vercel's Express runtime loads this entry point without starting a local listener.
+export default app;

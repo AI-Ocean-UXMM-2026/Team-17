@@ -18,7 +18,7 @@ import { errorSchema, response } from "../lib/openapi";
 
 export const openApiDocument = {
   openapi: "3.0.3",
-  info: { title: "ParcelOps AI API", version: "1.0.0", description: "Database-backed authentication and profiles. Use an opaque access token with Authorize; refresh tokens belong in the refresh request body." },
+  info: { title: "ParcelOps AI API", version: "1.0.0", description: "Parcel operations API for SME sellers, delivery Operators, and Riders: authentication, profiles, orders and QR tracking, provider city pricing, warehouse receiving, rider onboarding and assignments, delivery status updates, incidents, and reports. Protected operations enforce role, provider, and resource permissions. Use an opaque access token with Authorize; refresh tokens belong in the refresh request body. See each operation for required permissions and allowed transitions." },
   servers: [{ url: "/", description: "Current server" }],
   tags: [
     { name: "Authentication" },
