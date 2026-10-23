@@ -1,4 +1,4 @@
-# ParcelOps AI backend
+# SurferTrack backend
 
 Express, TypeScript, Prisma, and Supabase PostgreSQL. See [AUTH.md](AUTH.md) for
 the database-backed authentication workflow and configuration.
@@ -15,9 +15,9 @@ npm run dev
 
 ## Swagger UI
 
-- UI: [http://localhost:3000/api/docs](http://localhost:3000/api/docs)
-- OpenAPI 3.0 JSON: [http://localhost:3000/api/docs.json](http://localhost:3000/api/docs.json)
-- Health: [http://localhost:3000/health](http://localhost:3000/health)
+- UI: [http://localhost:4000/api/docs](http://localhost:4000/api/docs)
+- OpenAPI 3.0 JSON: [http://localhost:4000/api/docs.json](http://localhost:4000/api/docs.json)
+- Health: [http://localhost:4000/health](http://localhost:4000/health)
 
 Use your configured port if it differs from 3000.
 
