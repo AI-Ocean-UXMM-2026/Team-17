@@ -131,10 +131,14 @@ In `AI-Ocean-UXMM-2026/Team-17` → **Settings → Secrets and variables → Act
 | --- | --- |
 | `VERCEL_TOKEN` | Vercel token authorized to deploy both existing projects; select the narrowest available account/team scope and suitable expiry |
 | `VERCEL_ORG_ID` | Owner/account/team ID for both projects |
-| `VERCEL_CLIENT_PROJECT_ID` | Project ID of `surfertrack-web` |
+| `VERCEL_PROJECT_ID` | Client project ID of `surfertrack-web`; passed to the CLI as `VERCEL_PROJECT_ID` |
 | `VERCEL_SERVER_PROJECT_ID` | Project ID of `surfertrack-api` |
 
 Obtain IDs from the Vercel project/account settings. Enter them directly in GitHub's secret UI; do not commit them or send credentials in chat. Missing secrets fail the deployment job with the missing repository secret name only. No remote secret availability was queried or verified locally.
+
+**Token rotation required before deployment:** the previous Vercel token was exposed. Revoke it in Vercel, create a replacement authorized for the same Team and both projects, and update the repository's `VERCEL_TOKEN` secret. Do not reuse the exposed token. Both workflows require the manual `vercel_token_rotated` confirmation (default false) and stop before any Vercel command if it is unchecked. This is an operator attestation; the workflow cannot independently prove revocation or replacement. No token values were read or printed during this fix.
+
+The original client workflow referenced the nonexistent `VERCEL_CLIENT_PROJECT_ID` secret. It now uses the existing `VERCEL_PROJECT_ID` repository secret, and missing-secret diagnostics use that actual name. The server mapping remains `secrets.VERCEL_SERVER_PROJECT_ID` → CLI `VERCEL_PROJECT_ID`. Both use the same `VERCEL_ORG_ID` Team. GitHub deployment credentials do not automatically become Vercel application environment variables; configure Preview app variables separately below.
 
 Create GitHub Environments named **staging-client** and **staging-server**. Restrict deployment branches to `main`, and configure required reviewers where supported by the repository's GitHub plan. These GitHub Environment names gate the jobs; the Vercel target remains **Preview**. Keep secrets in repository secrets as specified above. If organizational Actions policy restricts allowed actions, allow the two pinned official actions. The workflow files must first be reviewed and made available on the default branch before GitHub offers manual dispatch; this task does not commit or push them.
 
@@ -176,9 +180,9 @@ Review **Deployment Protection** for both projects. A browser registration reque
 After the files and settings are reviewed and available on `main`:
 
 1. Open the repository's **Actions** tab.
-2. Select **Deploy Server Preview**, click **Run workflow**, choose `main`, and run it. Approve the staging-server Environment if configured.
+2. Select **Deploy Server Preview**, click **Run workflow**, choose `main`, confirm `vercel_token_rotated` only after completing revocation/replacement, and run it. Approve the staging-server Environment if configured.
 3. Inspect the job summary for the **Server Preview** URL. Confirm health/access and the stable API staging origin.
-4. Configure/confirm frontend Preview variables, then select **Deploy Client Preview** and run it on `main`. Approve staging-client if configured.
+4. Configure/confirm frontend Preview variables, then select **Deploy Client Preview** and run it on `main` with the same token-rotation confirmation. Approve staging-client if configured.
 5. Find the **Client Preview** URL in that run's job summary. Open it using the configured stable origin for session tests.
 
 Both deployment steps capture Vercel's returned URL as the `deployment` step's `url` output and append it to the Actions summary. The Vercel project's Deployments tab also lists the result. CLI stdout is captured; CLI progress/errors appear in the step logs. A settings validation failure prints the setting or variable **name**, never its value.
